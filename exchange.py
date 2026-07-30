@@ -502,3 +502,53 @@ class ExchangeClient:
 
         self.logger.error("❌ Error cerrando la posición.")
         return None
+
+    def get_last_closed_pnl(self, limit: int = 3) -> list:
+        """
+        Consulta el historial de PnL cerrado para detectar cierres por SL/TP.
+
+        Bybit registra aquí cada posición cerrada automáticamente (SL, TP o liquidación),
+        lo que permite reconciliar el estado interno del bot con la realidad del exchange.
+
+        Args:
+            limit: Número máximo de registros a traer (default=3 para capturar el más reciente).
+
+        Returns:
+            Lista de dicts con los campos relevantes de cada cierre:
+              - 'side': 'Buy' (era Long) o 'Sell' (era Short)
+              - 'qty': cantidad cerrada
+              - 'avg_entry_price': precio promedio de entrada
+              - 'avg_exit_price': precio promedio de salida
+              - 'closed_pnl': PnL realizado en USDT (positivo=ganancia, negativo=pérdida)
+              - 'created_time_ms': timestamp UTC del cierre en milisegundos
+        """
+        response = self._safe_request(
+            self.session.get_closed_pnl,
+            category=self.config.category,
+            symbol=self.config.symbol,
+            limit=limit,
+        )
+        if not response:
+            return []
+
+        try:
+            results = []
+            for entry in response["result"]["list"]:
+                pnl  = float(entry.get("closedPnl", 0) or 0)
+                qty  = float(entry.get("qty", 0) or 0)
+                ep   = float(entry.get("avgEntryPrice", 0) or 0)
+                xp   = float(entry.get("avgExitPrice", 0) or 0)
+                ts   = int(entry.get("createdTime", 0) or 0)
+                side = entry.get("side", "")
+                results.append({
+                    "side":             side,
+                    "qty":              qty,
+                    "avg_entry_price":  ep,
+                    "avg_exit_price":   xp,
+                    "closed_pnl":       pnl,
+                    "created_time_ms":  ts,
+                })
+            return results
+        except (KeyError, IndexError, ValueError) as e:
+            self.logger.error(f"❌ Error obteniendo closed PnL: {e}")
+            return []

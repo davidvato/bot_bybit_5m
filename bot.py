@@ -71,6 +71,11 @@ class TradingBot:
         self._orders_placed  = 0
         self._session_start  = datetime.now(timezone.utc)
 
+        # Rastreador de posición activa en memoria.
+        # Se rellena al ejecutar una orden y se limpia al detectar el cierre.
+        # Campos: timestamp, side, entry_price, stop_loss, take_profit, risk_usdt
+        self._pending_trade: Optional[dict] = None
+
     # =========================================================================
     # SECCIÓN: TEMPORIZADOR Y SINCRONIZACIÓN CON VELAS
     # =========================================================================
@@ -121,6 +126,100 @@ class TradingBot:
         return max(0.0, wait_seconds)
 
     # =========================================================================
+    # SECCIÓN: RECONCILIACIÓN DE POSICIONES
+    # =========================================================================
+
+    def _reconcile_position(self) -> None:
+        """
+        Paso 0 de cada ciclo: reconcilia el estado interno con el exchange.
+
+        Si el bot registró una posición abierta (_pending_trade) pero Bybit
+        ya no la muestra (fue cerrada por SL/TP automáticamente), este método:
+          1. Detecta el cierre consultando la posición en Bybit.
+          2. Obtiene el PnL real desde get_last_closed_pnl().
+          3. Actualiza el CSV del journal con status WIN/LOSS y pnl_usdt real.
+          4. Registra la pérdida en el risk_manager (drawdown diario).
+          5. Envía notificación de Telegram con el resultado.
+          6. Limpia _pending_trade para permitir la próxima entrada.
+        """
+        if self._pending_trade is None:
+            return  # Nada que reconciliar
+
+        open_pos = self.exchange.get_open_position()
+
+        if open_pos is not None:
+            # Posición todavía activa → reportar PnL no realizado y continuar
+            upnl = open_pos.get("unrealised_pnl", 0.0)
+            self.logger.info(
+                f"📌 Posición {open_pos['side']} sigue ACTIVA | "
+                f"Unrealized PnL: {upnl:+.2f} USDT"
+            )
+            return
+
+        # ── Posición cerrada detectada ────────────────────────────────────
+        self.logger.info(
+            "🔔 RECONCILIACIÓN: Posición cerrada detectada en Bybit "
+            "(SL/TP tocado o liquidación). Consultando PnL real..."
+        )
+
+        # Obtener PnL real del exchange
+        closed_records = self.exchange.get_last_closed_pnl(limit=3)
+        pnl_usdt    = 0.0
+        exit_price  = 0.0
+
+        if closed_records:
+            # El registro más reciente corresponde a esta posición
+            record      = closed_records[0]
+            pnl_usdt    = record["closed_pnl"]
+            exit_price  = record["avg_exit_price"]
+            entry_price = record["avg_entry_price"]
+            self.logger.info(
+                f"💵 PnL real Bybit: {pnl_usdt:+.4f} USDT | "
+                f"Entry={entry_price:,.2f} | Exit={exit_price:,.2f}"
+            )
+        else:
+            self.logger.warning(
+                "⚠️  No se pudo obtener el PnL cerrado de Bybit. "
+                "Estimando resultado desde SL configurado."
+            )
+            # Estimación conservadora: asumir que tocó el SL
+            pnl_usdt = -abs(self._pending_trade.get("risk_usdt", 0.0))
+
+        # Determinar si fue ganadora o perdedora
+        status = "WIN" if pnl_usdt > 0 else "LOSS"
+        emoji  = "✅" if status == "WIN" else "❌"
+
+        # Actualizar el journal CSV
+        ts = self._pending_trade.get("timestamp", "")
+        if ts:
+            self.trade_journal.close_trade(
+                timestamp=ts,
+                status=status,
+                pnl_usdt=pnl_usdt,
+                avg_exit_price=exit_price,
+            )
+
+        # Registrar pérdida en el drawdown diario
+        if pnl_usdt < 0:
+            self.risk_manager.register_trade_loss(abs(pnl_usdt))
+
+        # Notificación Telegram
+        side = self._pending_trade.get("side", "?")
+        self.logger.info(
+            f"{emoji} POSICIÓN {side} CERRADA POR SL/TP | "
+            f"PnL={pnl_usdt:+.2f} USDT | Status={status}"
+        )
+        self.notifier.notify_position_closed(
+            reason="SL/TP",
+            symbol=self.config.symbol,
+            side=side,
+            pnl=pnl_usdt,
+        )
+
+        # Limpiar el rastreador para la próxima operación
+        self._pending_trade = None
+
+    # =========================================================================
     # SECCIÓN: CICLO PRINCIPAL DE ANÁLISIS
     # =========================================================================
 
@@ -138,6 +237,9 @@ class TradingBot:
             f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
             f"{'='*60}"
         )
+
+        # --- Paso 0: Reconciliar posición con el exchange (detecta cierres por SL/TP) ---
+        self._reconcile_position()
 
         # --- Paso 1: Obtener datos de mercado ---
         self.logger.info("📡 Obteniendo datos de mercado...")
@@ -169,11 +271,9 @@ class TradingBot:
             executed = self.risk_manager.execute_signal(consensus)
             if executed:
                 self._orders_placed += 1
-                # N2: Registrar la operación en el Trade Journal
-                # Recalculamos SL/TP tal como lo hizo el risk_manager para el log
+                # Recalcular SL/TP tal como lo hizo el risk_manager
                 side = "Buy" if consensus.final_signal == "LONG" else "Sell"
                 info = self.risk_manager._get_instrument_info()
-                tick_size = info["tick_size"] if info else 0.5
                 sl_price, tp_price = self.risk_manager.calculate_sl_tp(
                     consensus.current_price, consensus.atr, side
                 )
@@ -181,12 +281,15 @@ class TradingBot:
                 _, risk_usdt = self.risk_manager.calculate_position_size(
                     balance, consensus.current_price, sl_price
                 )
-                # Obtener qty del último cálculo (aproximado — el tamaño real lo confirmó el exchange)
                 qty_raw = (risk_usdt * self.config.leverage) / max(
                     abs(consensus.current_price - sl_price), 0.0001
                 )
-                from risk_manager import RiskManager
-                qty = self.risk_manager._round_qty(qty_raw, info["qty_step"] if info else 0.001)
+                qty = self.risk_manager._round_qty(
+                    qty_raw, info["qty_step"] if info else 0.001
+                )
+                # Timestamp usado para identificar este trade en el journal
+                trade_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
                 self.trade_journal.log_trade(
                     consensus=consensus,
                     side=side,
@@ -194,6 +297,21 @@ class TradingBot:
                     stop_loss=sl_price,
                     take_profit=tp_price,
                     risk_usdt=risk_usdt,
+                )
+
+                # Registrar en el rastreador de posición activa para reconciliación
+                self._pending_trade = {
+                    "timestamp":   trade_ts,
+                    "side":        side,
+                    "entry_price": consensus.current_price,
+                    "stop_loss":   sl_price,
+                    "take_profit": tp_price,
+                    "risk_usdt":   risk_usdt,
+                }
+                self.logger.info(
+                    f"🔖 Posición registrada en rastreador interno: "
+                    f"{side} @ {consensus.current_price:,.2f} | "
+                    f"SL={sl_price:,.2f} | TP={tp_price:,.2f}"
                 )
         else:
             self.logger.info("⏸️  Sin señal de consenso. Esperando próxima vela.")

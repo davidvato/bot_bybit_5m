@@ -1,4 +1,4 @@
-﻿"""
+"""
 =============================================================================
 trade_journal.py - Registro Persistente de Operaciones (Trade Journal)
 =============================================================================
@@ -198,3 +198,99 @@ class TradeJournal:
         self.logger.info(f"  Prom. Perdedora:    -{m['avg_loss']:.2f} USDT")
         self.logger.info(f"  Max Drawdown:       -{m['max_drawdown_usdt']:.2f} USDT")
         self.logger.info("=" * 62)
+
+    # =========================================================================
+    # RECONCILIACIÓN DE POSICIONES (detección de cierres por SL/TP)
+    # =========================================================================
+
+    def get_open_trades(self) -> List[Dict]:
+        """
+        Retorna todas las filas del CSV que tienen status='OPEN'.
+
+        Usado por el mecanismo de reconciliación en cada ciclo para detectar
+        si alguna posición fue cerrada por SL/TP en el exchange.
+
+        Returns:
+            Lista de dicts con los campos del CSV para las filas abiertas.
+        """
+        open_trades: List[Dict] = []
+        if not os.path.exists(self.csv_path):
+            return open_trades
+        try:
+            with open(self.csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get("status") == "OPEN":
+                        open_trades.append(dict(row))
+        except Exception as e:
+            self.logger.error(f"Error leyendo trade_journal.csv en get_open_trades: {e}")
+        return open_trades
+
+    def close_trade(
+        self,
+        timestamp: str,
+        status: str,
+        pnl_usdt: float,
+        avg_exit_price: float = 0.0,
+    ) -> bool:
+        """
+        Actualiza una fila del CSV marcándola como cerrada con su PnL real.
+
+        Reescribe todo el archivo para garantizar consistencia. Diseñado para
+        ser llamado por el mecanismo de reconciliación cuando detecta que Bybit
+        cerró la posición automáticamente (SL/TP alcanzado).
+
+        Args:
+            timestamp:      Timestamp de la entrada (identifica unívocamente la fila).
+            status:         'WIN' si el PnL es positivo, 'LOSS' si es negativo.
+            pnl_usdt:       PnL realizado en USDT (puede ser negativo).
+            avg_exit_price: Precio de salida real reportado por Bybit (opcional, informativo).
+
+        Returns:
+            bool: True si se encontró y actualizó la fila, False si no se encontró.
+        """
+        if not os.path.exists(self.csv_path):
+            self.logger.warning("close_trade: CSV no encontrado.")
+            return False
+
+        updated = False
+        rows: List[Dict] = []
+
+        try:
+            with open(self.csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get("timestamp") == timestamp and row.get("status") == "OPEN":
+                        row["status"]   = status
+                        row["pnl_usdt"] = f"{pnl_usdt:.4f}"
+                        updated = True
+                        self.logger.info(
+                            f"📝 Trade cerrado en journal: {timestamp} | "
+                            f"Status={status} | PnL={pnl_usdt:+.2f} USDT"
+                            + (f" | Exit={avg_exit_price:,.2f}" if avg_exit_price else "")
+                        )
+                    rows.append(row)
+
+            if updated:
+                # Reescribir el CSV completo con la fila actualizada
+                with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=self.FIELDNAMES)
+                    writer.writeheader()
+                    writer.writerows(rows)
+
+                # Actualizar también la copia en memoria de la sesión
+                for trade in self._session_trades:
+                    if trade.get("timestamp") == timestamp and trade.get("status") == "OPEN":
+                        trade["status"]   = status
+                        trade["pnl_usdt"] = f"{pnl_usdt:.4f}"
+            else:
+                self.logger.warning(
+                    f"close_trade: No se encontró trade OPEN con timestamp={timestamp}"
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error actualizando trade_journal.csv: {e}")
+            return False
+
+        return updated
+

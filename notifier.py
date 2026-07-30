@@ -20,6 +20,7 @@ Tipos de notificaciones implementadas:
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -36,16 +37,22 @@ class TelegramNotifier:
     """
 
     _API_URL = "https://api.telegram.org/bot{token}/sendMessage"
-    _TIMEOUT  = 10  # segundos
+    _TIMEOUT  = 15  # segundos
 
     def __init__(self, token: str, chat_id: str) -> None:
         self._token   = token.strip() if token else ""
         self._chat_id = chat_id.strip() if chat_id else ""
         self._enabled = bool(self._token and self._chat_id)
 
+        # Proxy opcional: define TELEGRAM_PROXY en .env para superar bloqueos
+        # Ejemplos: http://user:pass@host:port  |  socks5://host:port
+        proxy_url = os.getenv("TELEGRAM_PROXY", "").strip()
+        self._proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+
         if self._enabled:
+            proxy_info = f" | Proxy: {proxy_url}" if proxy_url else ""
             logger.info(
-                f"📲 Telegram habilitado | Chat ID: {self._chat_id}"
+                f"📲 Telegram habilitado | Chat ID: {self._chat_id}{proxy_info}"
             )
         else:
             logger.info(
@@ -78,7 +85,12 @@ class TelegramNotifier:
         }
 
         try:
-            response = requests.post(url, json=payload, timeout=self._TIMEOUT)
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=self._TIMEOUT,
+                proxies=self._proxies,
+            )
             if response.status_code == 200:
                 return True
             else:
@@ -87,10 +99,13 @@ class TelegramNotifier:
                 )
                 return False
         except requests.exceptions.Timeout:
-            logger.warning("⚠️  Telegram: timeout al enviar notificación.")
+            logger.warning(
+                "⚠️  Telegram: timeout al enviar notificacion. "
+                "Verifica tu conexion o configura TELEGRAM_PROXY en .env"
+            )
             return False
         except requests.exceptions.RequestException as e:
-            logger.warning(f"⚠️  Telegram: error de red al enviar notificación: {e}")
+            logger.warning(f"⚠️  Telegram: error de red al enviar notificacion: {e}")
             return False
 
     # =========================================================================
