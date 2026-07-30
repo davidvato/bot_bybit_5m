@@ -1,0 +1,42 @@
+# =============================================================================
+# Bot de Trading BTC/USDT - Bybit API v5
+# .gitignore: Protege credenciales y archivos sensibles
+# =============================================================================
+
+# --- Credenciales y configuración sensible ---
+.env
+*.env
+!.env.example
+
+# --- Logs del bot ---
+logs/
+*.log
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+env/
+venv/
+.venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
