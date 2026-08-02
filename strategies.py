@@ -588,6 +588,8 @@ class StrategyEngine:
                 )
         else:
             self.logger.warning("  ⚠️  ADX no disponible (NaN). Continuando sin filtro de régimen.")
+            adx_pos = 0.0
+            adx_neg = 0.0
 
         # Ejecutar las 4 estrategias de forma independiente.
         # NOTA: S1 (EMA Cross) y S2 (EMA200+StochRSI) siguen tendencia;
@@ -595,7 +597,7 @@ class StrategyEngine:
         #       S4 (MACD+Vol) confirma el impulso con volumen real.
         # El consenso exige 3/4 votos para filtrar señales de baja calidad.
         signals = [
-            self.strategy_ema_cross(df),              # Estrategia 1 — EMA 9/21 momentum
+            self.strategy_ema_cross(df),              # Estrategia 1 — EMA 13/34 momentum
             self.strategy_trend_stochrsi(df),         # Estrategia 2 — EMA200 + StochRSI
             self.strategy_bollinger_reversal(df),     # Estrategia 3 — BB Reversal (filtro)
             self.strategy_macd_volume(df),            # Estrategia 4 — MACD + Volumen
@@ -640,6 +642,72 @@ class StrategyEngine:
                 f"\n  ⏸️  SIN CONSENSO — HOLD. "
                 f"Mínimo requerido: {min_votes}/4"
             )
+
+        # =====================================================================
+        # --- N2: FILTRO DE DIRECCIÓN ADX (DI+ vs DI−) ---
+        # Problema crítico detectado: el bot generaba señales LONG mientras
+        # DI− era 5-6x mayor que DI+, entrando en contra de tendencias bajistas
+        # fuertes. Este filtro descarta señales que van contra la presión dominante.
+        #
+        # Lógica: si DI− > DI+ * 1.5 → presión bajista dominante → no LONG
+        #         si DI+ > DI− * 1.5 → presión alcista dominante  → no SHORT
+        # Ratio 1.5 = la dirección contraria tiene 50% más fuerza que la señal.
+        # =====================================================================
+        if final_signal != "HOLD" and (adx_pos > 0 or adx_neg > 0):
+            ADX_DIRECTION_RATIO = 1.5  # La contrapresión debe superar 1.5x para filtrar
+
+            if final_signal == "LONG" and adx_neg > adx_pos * ADX_DIRECTION_RATIO:
+                self.logger.info(
+                    f"  🚫 FILTRO ADX-DIRECCIÓN: Señal LONG bloqueada — "
+                    f"DI-={adx_neg:.1f} > DI+={adx_pos:.1f} × {ADX_DIRECTION_RATIO} "
+                    f"(presión bajista dominante). Forzando HOLD."
+                )
+                final_signal = "HOLD"
+
+            elif final_signal == "SHORT" and adx_pos > adx_neg * ADX_DIRECTION_RATIO:
+                self.logger.info(
+                    f"  🚫 FILTRO ADX-DIRECCIÓN: Señal SHORT bloqueada — "
+                    f"DI+={adx_pos:.1f} > DI-={adx_neg:.1f} × {ADX_DIRECTION_RATIO} "
+                    f"(presión alcista dominante). Forzando HOLD."
+                )
+                final_signal = "HOLD"
+
+            else:
+                if final_signal != "HOLD":
+                    self.logger.info(
+                        f"  ✅ FILTRO ADX-DIRECCIÓN: Señal {final_signal} alineada con "
+                        f"la presión dominante (DI+={adx_pos:.1f} / DI-={adx_neg:.1f})."
+                    )
+
+        # =====================================================================
+        # --- N3: FILTRO BB WIDTH — Mercado comprimido (squeeze) ---
+        # Si el ancho relativo de las Bandas de Bollinger es menor al 0.5%,
+        # el mercado está en consolidación extrema. Las estrategias de momentum
+        # generan señales falsas en este entorno (cualquier dirección puede romper).
+        # Evitamos entrar en compressions; esperamos el breakout confirmado.
+        # =====================================================================
+        if final_signal != "HOLD" and "bb_upper" in df.columns and "bb_lower" in df.columns:
+            bb_upper = df["bb_upper"].iloc[-1]
+            bb_lower = df["bb_lower"].iloc[-1]
+            bb_mid   = df["bb_mid"].iloc[-1]
+
+            if not any(pd.isna([bb_upper, bb_lower, bb_mid])) and bb_mid > 0:
+                bb_width = (bb_upper - bb_lower) / bb_mid
+                BB_WIDTH_MIN = 0.005  # 0.5% — umbral de compresión mínima
+
+                if bb_width < BB_WIDTH_MIN:
+                    self.logger.info(
+                        f"  🚫 FILTRO BB-WIDTH: Señal {final_signal} bloqueada — "
+                        f"BB Width={bb_width*100:.3f}% < {BB_WIDTH_MIN*100:.1f}% "
+                        f"(mercado comprimido / squeeze). Forzando HOLD."
+                    )
+                    final_signal = "HOLD"
+                else:
+                    if final_signal != "HOLD":
+                        self.logger.info(
+                            f"  ✅ FILTRO BB-WIDTH: Width={bb_width*100:.3f}% ≥ "
+                            f"{BB_WIDTH_MIN*100:.1f}% — volatilidad suficiente."
+                        )
 
         self.logger.info("=" * 62)
 

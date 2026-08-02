@@ -322,9 +322,9 @@ class RiskManager:
             self.logger.info(
                 f"📊 Confidence promedio de señales {signal}: {avg_confidence:.2f}"
             )
-            if avg_confidence < 0.4:
+            if avg_confidence < 0.55:
                 self.logger.warning(
-                    f"⚠️  Confidence muy baja ({avg_confidence:.2f} < 0.40). "
+                    f"⚠️  Confidence muy baja ({avg_confidence:.2f} < 0.55). "
                     f"Señal {signal} ignorada para evitar entrada de baja calidad."
                 )
                 return False

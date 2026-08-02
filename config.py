@@ -77,8 +77,9 @@ class BotConfig:
     # PARÁMETROS DE INDICADORES TÉCNICOS (fijos, no requieren .env)
     # -------------------------------------------------------------------------
     # EMA Cross (Estrategia 1)
-    ema_fast: int = 9
-    ema_slow: int = 21
+    # 13/34 más estable que 9/21 en temporalidades cortas (menos ruido en 5m)
+    ema_fast: int = 13
+    ema_slow: int = 34
 
     # EMA de largo plazo para filtro de tendencia (Estrategia 2)
     ema_trend: int = 200
@@ -112,9 +113,9 @@ class BotConfig:
     # SISTEMA DE CONSENSO
     # -------------------------------------------------------------------------
     # Número mínimo de estrategias (de 4) que deben coincidir para abrir posición.
-    # ⚡ 5m TESTING: 2/4 — genera más señales para validar la mecánica del bot en 5m.
-    # Para PRODUCCIÓN en 5m: considerar subir a 3 para reducir señales falsas.
-    min_consensus: int = 2
+    # ⚡ 5m PRODUCCIÓN: 3/4 — filtro más exigente para evitar señales falsas.
+    # Con consenso 2/4 el Win Rate fue 0% en 6 trades. Subido a 3 para calidad.
+    min_consensus: int = 3
 
     # -------------------------------------------------------------------------
     # FILTRO ADX
