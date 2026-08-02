@@ -170,10 +170,9 @@ class RiskManager:
         # Monto a arriesgar en USDT
         risk_usdt = balance * self.config.risk_per_trade
 
-        # Cantidad de contratos con apalancamiento:
-        # (riesgo_usdt * leverage) / sl_distance da los contratos que
-        # permiten perder exactamente risk_usdt si se activa el SL
-        qty_raw = (risk_usdt * self.config.leverage) / sl_distance
+        # Cantidad de contratos (sin apalancamiento, en linear futures USDT
+        # el apalancamiento solo afecta el margen requerido, no el valor del tick)
+        qty_raw = risk_usdt / sl_distance
 
         # --- MARGIN CAP: Verificar que el margen requerido no supere el balance ---
         # Margen requerido = (qty * entry_price) / leverage
@@ -250,6 +249,18 @@ class RiskManager:
         tick_size = info["tick_size"] if info else 0.5
 
         sl_distance = atr * self.config.atr_sl_multiplier
+
+        # --- Mejora: Safeguard mínimo de SL para temporalidades cortas ---
+        # Asegura que el SL sea al menos un 0.15% del precio de entrada
+        # para evitar barridos por ruido de mercado en 5m
+        min_sl_distance = entry_price * 0.0015
+        if sl_distance < min_sl_distance:
+            self.logger.info(
+                f"🛡️  SL ajustado por safeguard: ATR daba {sl_distance:.4f} "
+                f"(< {min_sl_distance:.4f}). Se usa mínimo 0.15%."
+            )
+            sl_distance = min_sl_distance
+
         tp_distance = sl_distance * self.config.risk_reward_ratio
 
         if side == "Buy":  # Long
@@ -311,9 +322,9 @@ class RiskManager:
             self.logger.info(
                 f"📊 Confidence promedio de señales {signal}: {avg_confidence:.2f}"
             )
-            if avg_confidence < 0.3:
+            if avg_confidence < 0.4:
                 self.logger.warning(
-                    f"⚠️  Confidence muy baja ({avg_confidence:.2f} < 0.30). "
+                    f"⚠️  Confidence muy baja ({avg_confidence:.2f} < 0.40). "
                     f"Señal {signal} ignorada para evitar entrada de baja calidad."
                 )
                 return False

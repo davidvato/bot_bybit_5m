@@ -150,6 +150,18 @@ class BotConfig:
     # (para que los datos estén disponibles)
     seconds_before_close: int = 10
 
+    # -------------------------------------------------------------------------
+    # EXPIRACIÓN AUTOMÁTICA DE TRADES (Mejora #2)
+    # -------------------------------------------------------------------------
+    # Número máximo de velas que una posición puede estar abierta sin alcanzar
+    # SL ni TP. Si se supera, el bot cierra la posición a mercado para evitar
+    # acumulación de funding rate y mantener el capital disponible.
+    # 12 velas × 5m = 60 minutos máximo por trade.
+    # 0 = sin límite (desactivado).
+    max_candles_open: int = field(
+        default_factory=lambda: int(os.getenv("MAX_CANDLES_OPEN", "12"))
+    )
+
     def validate(self) -> None:
         """Valida que la configuración sea correcta antes de iniciar el bot."""
         errors = []

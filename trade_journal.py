@@ -19,8 +19,11 @@ COLUMNAS DEL CSV:
   long_votes      - Cuantas estrategias votaron LONG
   short_votes     - Cuantas estrategias votaron SHORT
   strategies      - Resumen de las estrategias activas
-  status          - 'OPEN', 'WIN', 'LOSS', 'UNKNOWN' (actualizable)
+  status          - 'OPEN', 'WIN', 'LOSS', 'EXPIRED', 'UNKNOWN' (actualizable)
   pnl_usdt        - PnL realizado (actualizable, 0.0 si aun abierto)
+  candles_open    - Numero de velas que estuvo abierto el trade [Mejora #2]
+  close_reason    - 'SL/TP', 'EXPIRACION', 'CONTRARIA' [Mejora #2]
+  slippage_usdt   - Diferencia entre perdida esperada (riesgo) y PnL real [Mejora #3]
 =============================================================================
 """
 
@@ -46,6 +49,7 @@ class TradeJournal:
         "stop_loss", "take_profit", "qty", "risk_usdt", "tp_usdt",
         "confidence_avg", "long_votes", "short_votes", "strategies",
         "status", "pnl_usdt",
+        "candles_open", "close_reason", "slippage_usdt",  # Mejoras #2 y #3
     ]
 
     def __init__(self, config: BotConfig) -> None:
@@ -97,7 +101,7 @@ class TradeJournal:
         )
 
         sl_distance = abs(consensus.current_price - stop_loss)
-        tp_usdt = sl_distance * self.config.risk_reward_ratio * qty * self.config.leverage
+        tp_usdt = sl_distance * self.config.risk_reward_ratio * qty
 
         strategies_summary = " | ".join(
             f"{s.name}={s.signal}" for s in consensus.signals
@@ -119,6 +123,9 @@ class TradeJournal:
             "strategies":     strategies_summary,
             "status":         "OPEN",
             "pnl_usdt":       "0.0",
+            "candles_open":   "0",    # Se actualiza al cerrar [Mejora #2]
+            "close_reason":   "",     # Se actualiza al cerrar [Mejora #2]
+            "slippage_usdt":  "0.0",  # Se actualiza al cerrar [Mejora #3]
         }
 
         try:
@@ -232,22 +239,28 @@ class TradeJournal:
         status: str,
         pnl_usdt: float,
         avg_exit_price: float = 0.0,
+        candles_open: int = 0,
+        close_reason: str = "SL/TP",
+        risk_usdt: float = 0.0,
     ) -> bool:
         """
-        Actualiza una fila del CSV marcándola como cerrada con su PnL real.
+        Actualiza una fila del CSV marcandola como cerrada con su PnL real.
 
-        Reescribe todo el archivo para garantizar consistencia. Diseñado para
-        ser llamado por el mecanismo de reconciliación cuando detecta que Bybit
-        cerró la posición automáticamente (SL/TP alcanzado).
+        Reescribe todo el archivo para garantizar consistencia. Disenado para
+        ser llamado por el mecanismo de reconciliacion cuando detecta que Bybit
+        cerro la posicion automaticamente (SL/TP alcanzado) o por expiracion.
 
         Args:
-            timestamp:      Timestamp de la entrada (identifica unívocamente la fila).
-            status:         'WIN' si el PnL es positivo, 'LOSS' si es negativo.
+            timestamp:      Timestamp de la entrada (identifica univocamente la fila).
+            status:         'WIN', 'LOSS' o 'EXPIRED'.
             pnl_usdt:       PnL realizado en USDT (puede ser negativo).
-            avg_exit_price: Precio de salida real reportado por Bybit (opcional, informativo).
+            avg_exit_price: Precio de salida real reportado por Bybit (opcional).
+            candles_open:   Cuantas velas estuvo abierto el trade [Mejora #2].
+            close_reason:   Motivo de cierre: 'SL/TP', 'EXPIRACION', 'CONTRARIA' [Mejora #2].
+            risk_usdt:      Riesgo original calculado al abrir (para calcular slippage) [Mejora #3].
 
         Returns:
-            bool: True si se encontró y actualizó la fila, False si no se encontró.
+            bool: True si se encontro y actualizo la fila, False si no se encontro.
         """
         if not os.path.exists(self.csv_path):
             self.logger.warning("close_trade: CSV no encontrado.")
@@ -261,14 +274,45 @@ class TradeJournal:
                 reader = csv.DictReader(f)
                 for row in reader:
                     if row.get("timestamp") == timestamp and row.get("status") == "OPEN":
-                        row["status"]   = status
-                        row["pnl_usdt"] = f"{pnl_usdt:.4f}"
+                        row["status"]    = status
+                        row["pnl_usdt"]  = f"{pnl_usdt:.4f}"
+
+                        # --- Mejora #2: registrar velas abiertas y motivo de cierre ---
+                        row["candles_open"] = str(candles_open)
+                        row["close_reason"] = close_reason
+
+                        # --- Mejora #3: calcular slippage ---
+                        # Slippage = diferencia entre la perdida esperada (risk_usdt)
+                        # y la perdida real. Positivo = mejor que lo esperado.
+                        # Negativo = peor (slippage adverso).
+                        if risk_usdt > 0 and pnl_usdt < 0:
+                            slippage = risk_usdt - abs(pnl_usdt)
+                        elif risk_usdt > 0 and pnl_usdt >= 0:
+                            slippage = 0.0  # Trade ganador, no hay perdida real
+                        else:
+                            slippage = 0.0
+                        row["slippage_usdt"] = f"{slippage:.4f}"
+
                         updated = True
+                        slip_str = f" | Slippage={slippage:+.2f} USDT" if risk_usdt > 0 else ""
                         self.logger.info(
                             f"📝 Trade cerrado en journal: {timestamp} | "
-                            f"Status={status} | PnL={pnl_usdt:+.2f} USDT"
+                            f"Status={status} | PnL={pnl_usdt:+.2f} USDT | "
+                            f"Velas={candles_open} | Motivo={close_reason}"
                             + (f" | Exit={avg_exit_price:,.2f}" if avg_exit_price else "")
+                            + slip_str
                         )
+
+                        # --- Mejora #3: alerta si el slippage es adverso y significativo ---
+                        if slippage < -20:
+                            self.logger.warning(
+                                f"⚠️  SLIPPAGE ADVERSO DETECTADO: Se esperaba perder "
+                                f"{risk_usdt:.2f} USDT pero se perdio {abs(pnl_usdt):.2f} USDT "
+                                f"(diferencia: {slippage:.2f} USDT). "
+                                f"Posibles causas: ejecucion de SL a precio peor, "
+                                f"funding rate acumulado, o comisiones adicionales."
+                            )
+
                     rows.append(row)
 
             if updated:
