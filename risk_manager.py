@@ -250,10 +250,10 @@ class RiskManager:
 
         sl_distance = atr * self.config.atr_sl_multiplier
 
-        # --- Mejora: Safeguard mínimo de SL para temporalidades cortas ---
-        # Asegura que el SL sea al menos un 0.15% del precio de entrada
-        # para evitar barridos por ruido de mercado en 5m
-        min_sl_distance = entry_price * 0.0015
+        # --- Mejora: Safeguard mínimo de SL para temporalidades de 5m ---
+        # Asegura que el SL sea al menos un 0.03% del precio de entrada
+        # para evitar barridos por ruido de mercado (ajustado para SPCXUSDT)
+        min_sl_distance = entry_price * 0.0003
         if sl_distance < min_sl_distance:
             self.logger.info(
                 f"🛡️  SL ajustado por safeguard: ATR daba {sl_distance:.4f} "

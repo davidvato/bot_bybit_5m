@@ -409,14 +409,14 @@ class TradingBot:
             bool: True si la inicialización fue exitosa.
         """
         self.logger.info("=" * 60)
-        self.logger.info("  🤖 BOT DE TRADING BTC/USDT BYBIT - INICIANDO")
+        self.logger.info("  🤖 BOT DE TRADING SPCXUSDT BYBIT - INICIANDO")
         self.logger.info("=" * 60)
         self.logger.info(f"  Símbolo:       {self.config.symbol}")
         self.logger.info(f"  Temporalidad:  {self.config.timeframe}m")
         self.logger.info(f"  Modo:          {'⚠️  TESTNET' if self.config.testnet else '🔴 MAINNET REAL'}")
         self.logger.info(f"  Apalancamiento:{self.config.leverage}x")
         self.logger.info(f"  Riesgo/trade:  {self.config.risk_per_trade*100:.1f}%")
-        self.logger.info(f"  Consenso mín:  {self.config.min_consensus}/3 estrategias")
+        self.logger.info(f"  Consenso mín:  {self.config.min_consensus}/4 estrategias")
         self.logger.info(f"  ATR SL mult:   {self.config.atr_sl_multiplier}x ATR")
         self.logger.info(f"  R/R ratio:     1:{self.config.risk_reward_ratio}")
         self.logger.info("=" * 60)

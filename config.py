@@ -115,7 +115,7 @@ class BotConfig:
     # Número mínimo de estrategias (de 4) que deben coincidir para abrir posición.
     # ⚡ 5m PRODUCCIÓN: 3/4 — filtro más exigente para evitar señales falsas.
     # Con consenso 2/4 el Win Rate fue 0% en 6 trades. Subido a 3 para calidad.
-    min_consensus: int = 3
+    min_consensus: int = 2
 
     # -------------------------------------------------------------------------
     # FILTRO ADX

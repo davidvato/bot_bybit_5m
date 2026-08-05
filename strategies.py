@@ -693,7 +693,7 @@ class StrategyEngine:
 
             if not any(pd.isna([bb_upper, bb_lower, bb_mid])) and bb_mid > 0:
                 bb_width = (bb_upper - bb_lower) / bb_mid
-                BB_WIDTH_MIN = 0.005  # 0.5% — umbral de compresión mínima
+                BB_WIDTH_MIN = 0.0010  # 0.10% — umbral de compresión mínima para SPCXUSDT
 
                 if bb_width < BB_WIDTH_MIN:
                     self.logger.info(
